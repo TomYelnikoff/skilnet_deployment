@@ -1,0 +1,22 @@
+services:
+  chatbot:
+    build: .
+    image: silknet-chatbot:latest
+    ports:
+      - "5000:5000"
+    environment:
+      AWS_REGION: us-east-1
+      # BEDROCK_MODEL_ID: global.anthropic.claude-opus-4-6-v1
+      # Point boto3 at the mounted AWS CLI config (only used with the mount below).
+      AWS_SHARED_CREDENTIALS_FILE: /aws/credentials
+      AWS_CONFIG_FILE: /aws/config
+      # AWS_PROFILE: default
+    volumes:
+      - chat-data:/data                  # SQLite history survives container restarts
+      # Option B: reuse the host's AWS CLI configuration (read-only).
+      # Remove this line if the EC2 instance has an IAM role (Option A, recommended).
+      - ${HOME}/.aws:/aws:ro
+    restart: unless-stopped
+
+volumes:
+  chat-data:
