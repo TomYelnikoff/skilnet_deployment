@@ -296,3 +296,14 @@ textarea::placeholder { color: var(--muted); }
   background: none; border: none; cursor: pointer; padding: 4px 6px; border-radius: 6px;
 }
 .btn-link:hover { background: var(--bot-bubble); }
+
+/* ---------------------------------------------------------- Headline */
+.welcome .headline {
+  font-size: clamp(26px, 4.2vw, 36px); font-weight: 600; letter-spacing: -.02em;
+  line-height: 1.15; margin: 0 0 10px;
+}
+.headline span {
+  background: linear-gradient(135deg, #6366f1, #8b5cf6 55%, #ec4899);
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent; -webkit-text-fill-color: transparent;
+}
