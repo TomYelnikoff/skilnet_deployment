@@ -23,6 +23,10 @@
       ...options,
     });
     const data = await res.json().catch(() => ({}));
+    if (res.status === 401) {
+      window.location.href = "/login"; // session expired
+      throw new Error(data.error || "Please sign in again.");
+    }
     if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
     return data;
   }
@@ -311,6 +315,10 @@
   newBtn.addEventListener("click", newChat);
   menuBtn.addEventListener("click", () => setSidebar(!app.classList.contains("sidebar-open")));
   backdrop.addEventListener("click", () => setSidebar(false));
+  $("logout-btn").addEventListener("click", async () => {
+    await fetch("/api/logout", { method: "POST" }).catch(() => {});
+    window.location.href = "/login";
+  });
 
   /* ----------------------------------------------------------- Init */
   showWelcome();

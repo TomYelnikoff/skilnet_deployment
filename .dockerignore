@@ -10,3 +10,4 @@ __pycache__
 Dockerfile
 docker-compose*.yml
 bedrock_llm_connection.py
+.secret_key

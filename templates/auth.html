@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ "Create account" if mode == "signup" else "Sign in" }} · AI Assistant</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="auth-card" data-mode="{{ mode }}">
+    <div class="brand">
+      <div class="avatar avatar-bot" aria-hidden="true">AI</div>
+      <h1>AI Assistant</h1>
+    </div>
+
+    <h2>{{ "Create your account" if mode == "signup" else "Welcome back" }}</h2>
+    <p class="auth-sub">
+      {{ "Sign up with your email and a password." if mode == "signup" else "Sign in to continue to your conversations." }}
+    </p>
+
+    <form id="auth-form" novalidate>
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="email" required autofocus maxlength="254">
+
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required maxlength="128"
+             autocomplete="{{ 'new-password' if mode == 'signup' else 'current-password' }}"
+             {% if mode == "signup" %}minlength="8" aria-describedby="pw-hint"{% endif %}>
+      {% if mode == "signup" %}<p id="pw-hint" class="field-hint">At least 8 characters.</p>{% endif %}
+
+      <p id="auth-error" class="auth-error" role="alert" hidden></p>
+
+      <button id="auth-submit" class="btn-primary" type="submit">
+        {{ "Create account" if mode == "signup" else "Sign in" }}
+      </button>
+    </form>
+
+    <p class="auth-switch">
+      {% if mode == "signup" %}
+        Already have an account? <a href="{{ url_for('login_page') }}">Sign in</a>
+      {% else %}
+        New here? <a href="{{ url_for('signup_page') }}">Create an account</a>
+      {% endif %}
+    </p>
+  </main>
+
+  <script src="{{ url_for('static', filename='auth.js') }}"></script>
+</body>
+</html>
