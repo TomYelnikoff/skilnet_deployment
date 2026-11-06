@@ -82,6 +82,11 @@ aws iam create-role --role-name silknet-github-actions-deploy \
 aws iam put-role-policy --role-name silknet-github-actions-deploy --policy-name deploy \
   --policy-document file://deploy/iam/github-deploy-policy.json
 ```
-The trust policy only lets `repo:TomYelnikoff/skilnet_deployment` on branch `main` assume the role.
+The trust policy only lets `TomYelnikoff/skilnet_deployment` on branch `main` assume the role.
+GitHub's OIDC `sub` claim includes the owner and repo numeric IDs
+(`repo:TomYelnikoff@44921618/skilnet_deployment@1448154253:ref:refs/heads/main`), so a deleted
+and re-created repo with the same name cannot assume it. If the role is ever denied, look up the
+exact `sub` GitHub sent in CloudTrail (`AssumeRoleWithWebIdentity` events) and update the policy with
+`aws iam update-assume-role-policy --role-name silknet-github-actions-deploy --policy-document file://deploy/iam/github-trust-policy.json`.
 The instance needs the SSM agent online (it has `AmazonSSMManagedInstanceCore` on its role).
 Change the repo name/account/instance id in `deploy/iam/*.json` if any of them change.
