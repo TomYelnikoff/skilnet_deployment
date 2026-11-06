@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from functools import wraps
 
 import boto3
+from botocore.config import Config
 from botocore.exceptions import ClientError, NoCredentialsError
 from flask import (
     Flask,
@@ -31,7 +32,19 @@ SYSTEM_PROMPT = os.environ.get(
 # sent verbatim. Older ones are compacted into a rolling summary that is saved
 # on the conversation and sent in the system prompt instead.
 CONTEXT_WINDOW_MESSAGES = max(1, int(os.environ.get("CONTEXT_WINDOW_MESSAGES", "5")))
-SUMMARY_MODEL_ID = os.environ.get("SUMMARY_MODEL_ID", MODEL_ID)
+# A small, cheap model does the summarizing (separate rate limit from the chat model).
+SUMMARY_MODEL_ID = os.environ.get(
+    "SUMMARY_MODEL_ID", "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+)
+# Compaction is lazy: messages that fell out of the window stay in the context
+# verbatim until at least COMPACT_BATCH_MESSAGES of them have piled up AND they
+# hold >= COMPACT_MIN_CHARS (below that a summarizer call costs more than it
+# saves). COMPACT_FORCE_MESSAGES bounds the pile regardless of size.
+COMPACT_BATCH_MESSAGES = max(1, int(os.environ.get("COMPACT_BATCH_MESSAGES", "4")))
+COMPACT_MIN_CHARS = int(os.environ.get("COMPACT_MIN_CHARS", "600"))
+COMPACT_FORCE_MESSAGES = max(
+    COMPACT_BATCH_MESSAGES, int(os.environ.get("COMPACT_FORCE_MESSAGES", "20"))
+)
 SUMMARY_MAX_TOKENS = 600
 SUMMARY_SYSTEM_PROMPT = (
     "You maintain a compact running summary of a conversation between a user and an "
@@ -83,7 +96,11 @@ app.config.update(
 )
 
 session = boto3.Session(region_name=AWS_REGION)
-bedrock = session.client("bedrock-runtime")
+# Adaptive retries absorb short Bedrock throttling bursts instead of failing the turn.
+bedrock = session.client(
+    "bedrock-runtime",
+    config=Config(retries={"max_attempts": 6, "mode": "adaptive"}, read_timeout=90),
+)
 
 
 # ---------------------------------------------------------------- database
@@ -171,11 +188,15 @@ def conversation_row(db, conv_id):
 
 
 def compact_context(db, conv_id, window_first_id):
-    """Fold messages older than the context window into the saved summary.
+    """Fold messages older than the context window into the saved summary, lazily.
 
-    Returns (summary_text_or_None, (input_tokens, output_tokens) or None). The
-    tokens are only set when a summarization call was actually made. On a model
-    failure the previous summary is kept and compaction is retried next turn.
+    Returns (summary, pending_rows, tokens):
+      summary       saved summary text or None
+      pending_rows  older messages NOT yet in the summary; the caller sends them
+                    verbatim before the window so no context is lost
+      tokens        (input, output) of the summarizer call, only if one was made
+    On a summarizer failure nothing is lost: the messages stay pending and
+    compaction is retried next turn.
     """
     conv = db.execute(
         "SELECT summary, summary_upto FROM conversations WHERE id = ?", (conv_id,)
@@ -188,7 +209,14 @@ def compact_context(db, conv_id, window_first_id):
         (conv_id, upto, window_first_id),
     ).fetchall()
     if not older:
-        return summary, None
+        return summary, [], None
+
+    chars = sum(len(m["content"]) for m in older)
+    due = len(older) >= COMPACT_BATCH_MESSAGES and (
+        chars >= COMPACT_MIN_CHARS or len(older) >= COMPACT_FORCE_MESSAGES
+    )
+    if not due:
+        return summary, older, None
 
     transcript = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in older)
     prompt = (
@@ -204,20 +232,20 @@ def compact_context(db, conv_id, window_first_id):
         )
     except (ClientError, NoCredentialsError) as err:
         app.logger.error("Context compaction failed, will retry next turn: %s", err)
-        return summary, None
+        return summary, older, None
 
     new_summary = "".join(
         b["text"] for b in resp["output"]["message"]["content"] if "text" in b
     ).strip()
     if not new_summary:
-        return summary, None
+        return summary, older, None
     db.execute(
         "UPDATE conversations SET summary = ?, summary_upto = ? WHERE id = ?",
         (new_summary, older[-1]["id"], conv_id),
     )
     db.commit()
     usage = resp.get("usage", {})
-    return new_summary, (usage.get("inputTokens") or 0, usage.get("outputTokens") or 0)
+    return new_summary, [], (usage.get("inputTokens") or 0, usage.get("outputTokens") or 0)
 
 
 # -------------------------------------------------------------------- auth
@@ -446,10 +474,16 @@ def chat():
     ).fetchall()[::-1]
     while rows and rows[0]["role"] != "user":
         rows.pop(0)
-    messages = [{"role": r["role"], "content": [{"text": r["content"]}]} for r in rows]
 
-    # Everything older than the window is folded into the saved rolling summary.
-    summary, summary_tokens = compact_context(db, conv_id, rows[0]["id"] if rows else 0)
+    # Older messages are folded into the saved rolling summary once enough have
+    # piled up; until then they ride along verbatim (never silently dropped).
+    summary, pending, summary_tokens = compact_context(
+        db, conv_id, rows[0]["id"] if rows else 0
+    )
+    rows = list(pending) + rows
+    while rows and rows[0]["role"] != "user":
+        rows.pop(0)
+    messages = [{"role": r["role"], "content": [{"text": r["content"]}]} for r in rows]
     system_text = SYSTEM_PROMPT
     if summary:
         system_text += "\n\nSummary of the earlier conversation:\n" + summary
@@ -467,6 +501,8 @@ def chat():
     except ClientError as err:
         app.logger.error("Bedrock error: %s", err)
         rollback_user_turn()
+        if err.response["Error"].get("Code") == "ThrottlingException":
+            return jsonify(error="The model is busy right now. Please try again in a few seconds."), 429
         return jsonify(error=err.response["Error"]["Message"]), 502
 
     reply = "".join(
