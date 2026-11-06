@@ -66,3 +66,22 @@ two `AWS_*_FILE` variables, then `docker compose up -d --build`.
 - Conversation history lives in the `chatbot-data` volume (`/data/chat_history.db`).
   Back it up with: `docker run --rm -v chatbot-data:/data -v $PWD:/b alpine cp /data/chat_history.db /b/`
 - Logs: `docker logs -f chatbot`. Health: `docker ps` shows `(healthy)`.
+
+## 5. CI/CD (GitHub Actions)
+`.github/workflows/deploy.yml` runs on every push to `main` (and manually via *Run workflow*):
+build image -> push to ECR (`:<commit sha>` and `:latest`) -> run `deploy/remote-deploy.sh` on the EC2
+instance through SSM -> wait for the container to be healthy, roll back to the previous image if not.
+There is no SSH and no AWS key stored in GitHub: the job assumes an IAM role through GitHub's OIDC.
+
+**One-time AWS setup** (needs IAM permissions; policies are in `deploy/iam/`):
+```bash
+aws iam create-open-id-connect-provider --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com --thumbprint-list 6938fd4d98bab03faadb97b34396831e3780aea1
+aws iam create-role --role-name silknet-github-actions-deploy \
+  --assume-role-policy-document file://deploy/iam/github-trust-policy.json
+aws iam put-role-policy --role-name silknet-github-actions-deploy --policy-name deploy \
+  --policy-document file://deploy/iam/github-deploy-policy.json
+```
+The trust policy only lets `repo:TomYelnikoff/skilnet_deployment` on branch `main` assume the role.
+The instance needs the SSM agent online (it has `AmazonSSMManagedInstanceCore` on its role).
+Change the repo name/account/instance id in `deploy/iam/*.json` if any of them change.
